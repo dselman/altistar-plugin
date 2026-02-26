@@ -1,0 +1,580 @@
+---
+name: create-resource
+description: Create educational content (resources and courses) for the AltiStar SaaS application. Use when the user wants to create resources, courses, quizzes, or upload images/PDFs for AI-powered voice delivery.
+user_invocable: true
+---
+
+# Create Resource Skill
+
+This skill helps you create educational resources for the AltiStar platform. Resources are the building blocks of your curriculum - each is a self-contained learning unit delivered by AI bots to students via voice conversation or presentation mode. Resources are grouped into courses.
+
+## Instructions for Claude
+
+When this skill is invoked, follow these steps:
+
+0. **Tag Governance** (before creating anything):
+   a. Call `list_tags(pageSize: 50)` to fetch the organization's tag catalog
+   b. Reuse existing tags where possible — do not create near-duplicates (e.g. "maths" vs "math")
+   c. For genuinely new tags: ask the user to confirm, then call `create_tag(name)` to add them
+   d. Only use tags that exist in the catalog when calling `create_resource`
+
+1. **Gather Requirements**: Ask the user about:
+   - Topic/subject for the resource
+   - Target audience (age, skill level)
+   - Delivery mode preference (conversation or presentation)
+   - Desired length (default: 5-10 minutes)
+   - Any specific learning objectives
+   - Whether they want AI-generated images or have URLs to images/PDFs
+
+2. **Design the Resource**: Based on the guides, create a structure with:
+   - Clear learning objectives
+   - Logical sections with headings
+   - **A quiz after every major concept or section** — aim for at least 2-3 quizzes per resource. Quizzes are the primary way students actively engage with the material, and lessons without them feel passive and text-heavy.
+   - **At least 1-2 images per resource** — visuals break up text, illustrate concepts, and give the bot something concrete to discuss with the student. A resource with no images is almost always too text-heavy.
+   - Mix quiz types for variety (single choice, multiple choice, open answer, fraction, ordered list)
+
+3. **Create Content**: Draft the markdown content following best practices:
+   - Write instructions for the bot, not a script
+   - Use "the student" with they/them pronouns
+   - Keep sections digestible
+   - **IMPORTANT: Avoid text-heavy resources.** Every section should either have a quiz, an image, or both. If a section is just text with no interactivity, consider adding a quick quiz to check understanding or an image to illustrate the concept. Students learn best when they actively participate, not passively listen.
+
+4. **Source Media**: Find or create visuals for the resource. **Every resource should have images** — they are essential for engagement, not optional decoration.
+   - **Do NOT generate images via Python/code** — this is too slow and produces poor results
+   - **Use `create_text_image`** for vocabulary cards, sight words, labels, math expressions — instant, no API key needed
+   - **Use `generate_image`** for custom educational illustrations — server-side AI generation, fast, no base64 overhead
+   - **Use `upload_image_from_url`** for existing public images (Wikimedia, educational sites)
+   - **Use `create_image` (base64) only as a last resort** for user-provided local files
+   - **Verify every image**: After generation/upload, view the image to confirm it matches intent
+   - Write description/question/answer/hint based on what the image ACTUALLY shows, not what you intended
+   - For PDFs: description is critical since the bot cannot read PDF content
+
+5. **Execute Creation**: Use MCP tools to:
+   - Create the resource via `create_resource`
+   - Upload any media files via `upload_image_from_url` or `create_image`
+   - Create quizzes via `create_quiz`
+   - **CRITICAL**: Update resource content via `update_resource` to embed image and quiz references using the correct markdown syntax (see below)
+   - Optionally create a course and add the resource to it
+
+6. **Provide Testing Instructions**: Tell the user how to test their resource using the Test Resource button in the admin UI
+
+## MCP Tools
+
+Use the `altistar` MCP server tools:
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_resources` | List existing resources with optional tag filtering |
+| `get_resource` | Fetch a resource by ID |
+| `create_resource` | Create a new resource |
+| `update_resource` | Update an existing resource |
+| `generate_image` | Generate an AI image from a text prompt and attach to a resource (uses org's OpenAI key, preferred) |
+| `create_text_image` | Render a word/phrase into a PNG image (no AI needed, instant) |
+| `upload_image_from_url` | Upload an image or PDF from a URL to a resource |
+| `create_image` | Upload an image or PDF (base64 data) to a resource (last resort) |
+| `create_quiz` | Create a quiz for a resource |
+| `list_tags` | List available tags in the organization's catalog |
+| `create_tag` | Create a new tag in the organization's tag catalog |
+| `export_resource` | Export a resource as a base64-encoded ZIP (includes all media and quizzes) |
+| `import_resource` | Import a resource from a base64-encoded ZIP (creates a new resource) |
+| `create_course` | Create a new course (collection of resources) |
+| `list_courses` | List existing courses |
+| `add_resource_to_course` | Add a resource to a course |
+| `list_course_resources` | List resources already in a course (with details) |
+
+### Workflow
+
+```
+0. list_tags(pageSize: 50) → Fetch org's tag catalog
+   create_tag(name) → Create new tags (after user confirmation)
+
+1. create_resource(name, content, tags, deliveryMode)
+   → Returns resource with ID (tags must come from the catalog)
+
+2. generate_image(resourceId, prompt, description, question, answer, hint, botVisible)
+   → AI-generated image attached to resource (preferred for illustrations)
+   OR
+   create_text_image(resourceId, text, color, description, question, answer, hint, botVisible)
+   → Renders word/phrase into PNG (preferred for vocabulary/labels)
+   OR
+   upload_image_from_url(resourceId, url, description, question, answer, hint, botVisible)
+   → Downloads and attaches image from URL
+   OR (last resort)
+   create_image(resourceId, name, mimeType, data, description, question, answer, hint, botVisible)
+   → Uploads base64-encoded image
+
+3. create_quiz(resourceId, question, questionType, answers, ...)
+   → Returns quiz with ID
+
+4. update_resource(id, content)
+   → CRITICAL: Update content to include image and quiz references
+
+5. (Optional) create_course(name, description, tags, progressionType)
+   → Returns course with ID
+
+6. (Optional) list_course_resources(courseId)
+   → View existing resources in a course before adding
+
+7. (Optional) add_resource_to_course(courseId, resourceId, order)
+   → Adds resource to the course
+
+8. (Optional) export_resource(resourceId)
+   → Returns base64-encoded ZIP for backup or sharing
+
+9. (Optional) import_resource(zipData)
+   → Creates a new resource from a previously exported ZIP
+```
+
+### Tool Parameters
+
+**create_resource:**
+- `name` (required): Display name for the resource
+- `content` (required): Markdown content
+- `tags` (optional): Array of tags — must come from the tag catalog (call `list_tags` first, use `create_tag` for new ones)
+- `deliveryMode` (optional): `"conversation"` or `"presentation"`
+
+**generate_image** (preferred for custom illustrations):
+- `resourceId` (required): Resource to attach the image to
+- `prompt` (required): Text prompt describing the educational image to generate (max 4000 chars)
+- `description` (optional): What the image shows (important for bot)
+- `question` (optional): Question to ask about the image
+- `answer` (optional): Expected answer
+- `hint` (optional): Help for students
+- `botVisible` (optional): If true, bot can see the image
+
+**create_text_image** (preferred for words/phrases):
+- `resourceId` (required): Resource to attach the image to
+- `text` (required): The word or phrase to render (max 500 chars)
+- `color` (optional): Font color as CSS color (e.g. `"#333333"`, `"red"`). Defaults to `"#333333"`
+- `description` (optional): What the image shows (important for bot)
+- `question` (optional): Question to ask about the image
+- `answer` (optional): Expected answer
+- `hint` (optional): Help for students
+- `botVisible` (optional): If true, bot can see the image
+
+**upload_image_from_url** (preferred for remote use):
+- `resourceId` (required): Resource to attach image to
+- `url` (required): Public URL of the image to download
+- `name` (required): Image filename
+- `description` (optional): What the image shows (important for bot)
+- `question` (optional): Question to ask about the image
+- `answer` (optional): Expected answer
+- `hint` (optional): Help for students
+- `botVisible` (optional): If true, bot can see the image
+
+**create_image:**
+- `resourceId` (required): Resource to attach image to
+- `name` (required): Image filename
+- `mimeType` (required): Only `"image/png"`, `"image/jpeg"`, or `"application/pdf"` are supported
+- `data` (required): Base64-encoded image data
+- `description` (optional): What the image shows (important for bot)
+- `question` (optional): Question to ask about the image
+- `answer` (optional): Expected answer
+- `hint` (optional): Help for students
+- `botVisible` (optional): If true, bot can see the image
+
+**create_quiz:**
+- `resourceId` (required): Resource to attach quiz to
+- `question` (required): Question text
+- `questionType` (required): `"single"`, `"multiple"`, `"freetext"`, or `"ordered_list"`
+- `answers` (for single/multiple): Array of `{id, text, isCorrect}`
+- `expectedAnswer` (for freetext): Correct answer
+- `inputRestriction` (for freetext): `"text"`, `"integer"`, `"decimal"`, or `"fraction"`
+- `numericMin` (optional): Minimum allowed value for numeric inputs (integer, decimal, fraction)
+- `numericMax` (optional): Maximum allowed value for numeric inputs (integer, decimal, fraction)
+- `allowNegative` (optional): Whether negative values are accepted (default: true)
+- `evaluationCriteria` (optional): AI grading guidelines
+- `retryLimit` (optional): Max attempts
+- `hint` (optional): Guidance for wrong answers
+- `description` (optional): When the bot should present this quiz
+
+**create_course:**
+- `name` (required): Course name
+- `description` (optional): Course description
+- `tags` (optional): Array of tags
+- `progressionType` (optional): `"flexible"`, `"sequential"`, or `"random"`
+- `openEnrollment` (optional): If true, students can self-enroll from the course catalog
+- `defaultTeacher` (optional): User ID of the teacher assigned to self-enrolled students (required when openEnrollment is true)
+- `maxEnrollments` (optional): Maximum number of students who can enroll (null = unlimited)
+- `priceCents` (optional): Price in cents for paid courses (requires Stripe Connect)
+- `currency` (optional): Currency code for paid courses (e.g., `"GBP"`, `"USD"`, `"EUR"`)
+- `teacherOnly` (optional): If true, course is only visible to teachers in the catalog (preview mode)
+
+**export_resource:**
+- `resourceId` (required): The resource ID to export
+- Returns: Base64-encoded ZIP containing manifest, content, media, and quizzes
+
+**import_resource:**
+- `zipData` (required): Base64-encoded ZIP file data matching the format below
+- `fileName` (optional): Filename for the ZIP (default: `"import.zip"`)
+- Returns: The newly created resource (with ID and name)
+
+### Resource Archive Format (for import/export)
+
+The ZIP file **must** have all files at the root level (no subdirectory wrapper) with this structure:
+
+```
+manifest.json        # Required: metadata and file references
+content.md           # Required: markdown content with portable tokens
+media/               # Media files (images, videos, PDFs)
+  media-001.png
+  media-002.jpeg
+quizzes/             # Quiz definitions
+  quiz-001.json
+  quiz-002.json
+```
+
+**CRITICAL**: Files must be at the ZIP root — NOT inside a subdirectory. A ZIP containing `my-resource/manifest.json` will fail; it must be just `manifest.json`.
+
+#### manifest.json format
+
+```json
+{
+  "version": 1,
+  "exportedAt": "2026-01-01T00:00:00.000Z",
+  "resource": {
+    "name": "Subtraction on a Number Line",
+    "tags": ["maths", "subtraction"],
+    "deliveryMode": "conversation"
+  },
+  "media": [
+    {
+      "ref": "media-001",
+      "filename": "media/media-001.png",
+      "name": "Number Line Diagram",
+      "mimeType": "image/png",
+      "description": "A number line showing 15 - 3 = 12",
+      "question": "Where do we land after 3 hops back from 15?",
+      "answer": "We land on 12",
+      "hint": "Count the arrows backwards",
+      "order": null,
+      "botVisible": true
+    }
+  ],
+  "quizzes": [
+    {
+      "ref": "quiz-001",
+      "filename": "quizzes/quiz-001.json"
+    }
+  ]
+}
+```
+
+Key rules:
+- `version` must be `1`
+- `media` and `quizzes` are **arrays** (not objects)
+- Each media entry must have a `ref` field (e.g. `"media-001"`) matching its portable token in content.md
+- Each quiz entry must have a `ref` field (e.g. `"quiz-001"`) matching its portable token in content.md
+- Media filenames must match their `mimeType` extension (e.g. `media-001.png` for `image/png`)
+- Only `image/png`, `image/jpeg`, and `application/pdf` are supported for images
+
+#### content.md portable tokens
+
+Content must use portable `media://` and `quiz` tokens (NOT database IDs):
+
+```markdown
+![media-001](media://media-001)
+
+::quiz{#quiz-001}
+```
+
+The importer replaces these tokens with real database IDs after creating the records.
+
+#### Quiz JSON format
+
+Each quiz file (e.g. `quizzes/quiz-001.json`) contains:
+
+```json
+{
+  "question": "What is 15 - 3?",
+  "questionType": "freetext",
+  "inputRestriction": "integer",
+  "expectedAnswer": "12",
+  "numericMin": 0,
+  "numericMax": 20,
+  "allowNegative": false,
+  "evaluationCriteria": "Accept only the number 12.",
+  "retryLimit": 3,
+  "hint": "Start at 15 and count back 3 hops.",
+  "description": "Quiz after the number line example."
+}
+```
+
+**create_tag:**
+- `name` (required): Tag name to create (max 128 chars, lowercase recommended)
+
+**list_course_resources:**
+- `courseId` (required): The course ID to list resources for
+- Returns: Ordered list of resources with name, tags, order, and bot details (content stripped to save tokens)
+
+**add_resource_to_course:**
+- `courseId` (required): Course ID
+- `resourceId` (required): Resource ID to add
+- `order` (optional): Position in the course (important for sequential courses)
+- `bot` (optional): Override the course's default bot for this specific resource
+- `deliveryMode` (optional): Override the resource's default delivery mode within this course
+
+## Organizing Resources into Courses
+
+Courses group related resources together for students to complete. When creating a course, consider:
+
+### Progression Types
+
+| Type | Behavior | Best For |
+|------|----------|----------|
+| **Flexible** | Students complete resources in any order | Independent topics, reference materials |
+| **Sequential** | Students must follow the specified order | Prerequisite content, building-block skills |
+| **Random** | System selects the next resource | Practice drills, varied review |
+
+### Course Design Tips
+
+- **Use sequential progression** when earlier resources teach concepts needed for later ones
+- **Use flexible progression** when resources cover independent topics within a theme
+- **Set resource order** carefully for sequential courses - use the `order` parameter in `add_resource_to_course`
+- **Override the bot** for specific resources if a different AI persona or expertise is needed
+- **Override delivery mode** per resource if some topics work better as conversation vs presentation
+- **Keep courses focused** - 3-8 resources per course is a good range
+- **Use consistent tags** across resources and courses for easy organization
+
+### Open Enrollment
+
+Enable open enrollment to let students self-enroll from the course catalog:
+- Requires a `defaultTeacher` to be assigned for managing self-enrolled students
+- Optionally set `maxEnrollments` to cap capacity
+- Set `teacherOnly: true` to preview the course before releasing to students
+
+### Paid Courses
+
+If the organization has Stripe Connect configured:
+- Set `priceCents` and `currency` to create a paid course
+- Open enrollment must be enabled for paid courses
+- Students go through Stripe checkout and are automatically enrolled after payment
+
+## CRITICAL: Embedding Media and Quizzes in Resource Content
+
+After creating images and quizzes, you **MUST** update the resource content to include references to them. Without these references, the bot will NOT display the media or quizzes during delivery.
+
+### Image Reference Syntax
+
+```markdown
+![IMAGE_ID](/api/v1/images/IMAGE_ID/data)
+```
+
+Example: If `create_image` returns `{ id: 156 }`, insert:
+```markdown
+![156](/api/v1/images/156/data)
+```
+
+### Quiz Reference Syntax
+
+```markdown
+::quiz{#QUIZ_ID}
+```
+
+Example: If `create_quiz` returns `{ id: 28 }`, insert:
+```markdown
+::quiz{#28}
+```
+
+### Complete Example
+
+```
+# Step 1: Create resource
+create_resource(
+  name: "Introduction to Photosynthesis",
+  content: "# Learning Objectives\n\nPlaceholder content...",
+  tags: ["science", "biology"],
+  deliveryMode: "conversation"
+)
+# Response: { id: 42, ... }
+
+# Step 2: Upload image from URL
+upload_image_from_url(
+  resourceId: 42,
+  url: "https://example.com/plant-cell.png",
+  name: "Plant Cell Diagram",
+  description: "Diagram of a plant cell showing chloroplasts",
+  question: "Where does photosynthesis occur?",
+  answer: "In the chloroplasts",
+  hint: "Look for the green organelles",
+  botVisible: true
+)
+# Response: { id: 156, ... }
+
+# Step 3: Create quiz
+create_quiz(
+  resourceId: 42,
+  description: "Test understanding of photosynthesis location",
+  question: "In which organelle does photosynthesis take place?",
+  questionType: "single",
+  answers: [
+    { id: "a", text: "Mitochondria", isCorrect: false },
+    { id: "b", text: "Chloroplast", isCorrect: true },
+    { id: "c", text: "Nucleus", isCorrect: false }
+  ],
+  retryLimit: 2,
+  hint: "It contains chlorophyll, which is green"
+)
+# Response: { id: 28, ... }
+
+# Step 4: CRITICAL - Update resource with image and quiz references
+update_resource(
+  id: 42,
+  content: "# Learning Objectives\n\nBy the end of this resource, the student should understand photosynthesis.\n\n## What is Photosynthesis?\n\nExplain that plants convert sunlight into energy. Show the diagram:\n\n![156](/api/v1/images/156/data)\n\nDiscuss the diagram with the student.\n\n## Check Understanding\n\nNow test the student's knowledge:\n\n::quiz{#28}\n\n## Summary\n\nReview the key points."
+)
+```
+
+## Quiz Types
+
+### Single Choice
+```json
+{
+  "question": "What gas do plants absorb?",
+  "questionType": "single",
+  "answers": [
+    { "id": "a", "text": "Oxygen", "isCorrect": false },
+    { "id": "b", "text": "Carbon dioxide", "isCorrect": true }
+  ],
+  "hint": "Think about what humans breathe out"
+}
+```
+
+### Multiple Choice
+```json
+{
+  "question": "Select ALL ingredients for photosynthesis",
+  "questionType": "multiple",
+  "answers": [
+    { "id": "a", "text": "Sunlight", "isCorrect": true },
+    { "id": "b", "text": "Water", "isCorrect": true },
+    { "id": "c", "text": "Oxygen", "isCorrect": false }
+  ]
+}
+```
+
+### Open Answer
+```json
+{
+  "question": "Calculate 15% of 80",
+  "questionType": "freetext",
+  "inputRestriction": "decimal",
+  "expectedAnswer": "12",
+  "evaluationCriteria": "Accept 12, 12.0, or 12.00"
+}
+```
+
+### Fraction
+```json
+{
+  "question": "What is 1/2 + 1/6?",
+  "questionType": "freetext",
+  "inputRestriction": "fraction",
+  "expectedAnswer": "2/3",
+  "numericMin": 0,
+  "numericMax": 1,
+  "allowNegative": false,
+  "evaluationCriteria": "Accept equivalent fractions (e.g. 4/6, 8/12)"
+}
+```
+
+### Ordered List
+Students drag and drop items into the correct sequence. The answers array order defines the correct sequence — students see items shuffled.
+```json
+{
+  "question": "Put these in order from smallest to largest",
+  "questionType": "ordered_list",
+  "answers": [
+    { "id": "a", "text": "1/2", "isCorrect": false },
+    { "id": "b", "text": "0.55", "isCorrect": false },
+    { "id": "c", "text": "3/5", "isCorrect": false },
+    { "id": "d", "text": "62%", "isCorrect": false }
+  ],
+  "hint": "Convert everything to decimals to compare"
+}
+```
+Note: `isCorrect` is ignored for ordered_list — the array order IS the correct answer. Minimum 2 items, maximum 10.
+
+## Image Creation Speed
+
+**NEVER generate images via Python/code execution** (matplotlib, PIL, etc.) — this is extremely slow, produces poor results, and sends huge base64 payloads through MCP.
+
+Instead, use these server-side tools in order of preference:
+
+1. **`create_text_image`** — for words, phrases, vocabulary cards, sight words, labels, math expressions. Instant, no API key needed, deterministic rendering.
+2. **`generate_image`** — for custom educational illustrations, diagrams, scenes. Uses the org's OpenAI API key for server-side AI generation. Fast, no client-side overhead.
+3. **`upload_image_from_url`** — for publicly hosted images from Wikimedia, educational sites, etc.
+4. **`create_image` (base64)** — last resort only, for user-provided local files.
+
+## Image Metadata Accuracy
+
+**View/inspect every image before setting metadata.** AI-generated images may not match your prompt exactly.
+
+- Write `description`, `question`, `answer`, and `hint` based on what the image ACTUALLY shows, not what you intended
+- If the image doesn't match your intent, regenerate it or adjust the metadata to match reality
+
+**Bad example** (metadata written from intent, not inspection):
+```
+generate_image(prompt: "A number line showing 5 + 3 = 8")
+# Sets metadata WITHOUT viewing the result:
+description: "Number line showing 5 + 3 = 8"  # ← May not match actual image
+```
+
+**Good example** (metadata written after inspection):
+```
+generate_image(prompt: "A number line showing 5 + 3 = 8")
+# Views the returned image, sees it actually shows a number line 0-10 with an arrow from 5 to 8
+description: "A number line from 0 to 10 with an arrow jumping from 5 to 8"
+question: "What number does the arrow land on?"
+answer: "8"
+```
+
+## Tag Governance
+
+**Always call `list_tags` before assigning tags to resources.** This prevents tag sprawl and keeps the organization's tag catalog clean.
+
+### Rules
+- Reuse existing tags — don't create near-duplicates ("maths" vs "math", "Year 1" vs "year-1")
+- Ask the user before creating new tags via `create_tag`
+- Naming conventions: lowercase, hyphens for multi-word (e.g. "year-3", "key-stage-2", "number-bonds")
+- Prefer broader tags over hyper-specific ones ("fractions" not "adding-unit-fractions-year-4")
+
+### Example flow
+```
+# Step 1: Check existing tags
+list_tags(pageSize: 50)
+# → Items: [{ name: "maths" }, { name: "year-3" }, { name: "fractions" }]
+
+# Step 2: User wants a resource tagged "maths", "year-3", "number-line"
+# "maths" and "year-3" exist. "number-line" is new.
+# → Ask user: "The tag 'number-line' doesn't exist yet. Shall I create it?"
+
+# Step 3: User confirms
+create_tag(name: "number-line")
+
+# Step 4: Create resource with all tags from catalog
+create_resource(name: "...", content: "...", tags: ["maths", "year-3", "number-line"])
+```
+
+## Best Practices
+
+1. **Write for the bot, not the student** - The bot interprets your instructions and delivers them conversationally
+2. **Use clear headings** - Structure content with `#`, `##`, `###` for pacing
+3. **Keep resources short** - 5-10 minutes is ideal per resource; split longer content into multiple resources within a course
+4. **Include plenty of quizzes** - Aim for **at least 2-3 quizzes per resource**, placed after each major concept. Quizzes are the primary way to keep students actively engaged. A resource with fewer than 2 quizzes almost always feels too passive. Use a variety of quiz types (single choice, multiple choice, open answer, fraction, ordered list) to keep things interesting.
+5. **Include images in every resource** - Aim for **at least 1-2 images per resource**. Visuals break up text, illustrate concepts, and give the bot concrete material to discuss. Text-only resources feel dry and lecture-like.
+6. **Provide accurate media metadata** - View every image before setting description, question, answer, and hint. Write metadata for what the image actually shows, not what you intended.
+7. **Enable botVisible for important images** - Let the bot see diagrams and charts
+8. **Always embed references** - Images need `![ID](/api/v1/images/ID/data)` and quizzes need `::quiz{#ID}` in the content
+9. **Design resources to be self-contained** - Each resource should make sense on its own and be reusable across courses
+10. **Avoid text-heavy content** - If any section of your resource is more than a few sentences without a quiz or image, it's probably too text-heavy. Add interactivity.
+11. **Test your resources** - Use the Test Resource feature in the admin UI before assigning to students
+12. **Always call `list_tags` before assigning tags** - Reuse existing tags and only create new ones (via `create_tag`) with user confirmation.
+13. **Verify image content before writing metadata** - AI-generated images may not match your prompt exactly. View the image first.
+14. **Never run Python or other code to generate images** - Use `create_text_image` for words/phrases, `generate_image` for custom illustrations, `upload_image_from_url` for public images.
+
+## Additional Resources
+
+- [resource-creation-guide.md](resource-creation-guide.md) - Detailed resource structuring guidance
+- [teacher-guide.md](teacher-guide.md) - Teacher workflow and course management
